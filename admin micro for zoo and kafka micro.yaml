@@ -313,7 +313,7 @@ Resources:
                             content: |
                                 global:
                                  resolve_timeout: 1m
-                                 slack_api_url: 'https://hooks.slack.com/services/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'
+                                 slack_api_url: ' ADD YOUR SLACK WEBHOOK URL HERE'
 
                                 route:
                                  receiver: 'slack-notifications'
@@ -321,7 +321,7 @@ Resources:
                                 receivers:
                                 - name: 'slack-notifications'
                                   slack_configs:
-                                       - channel: '#sysops-test'
+                                       - channel: '#sysops-test' ( CHANGE CHANNEL NAME BASED ON WHICH CHANNEL YOU WANT YOUR NOTIFICATIONS ON )
                                          send_resolved: true
                             owner: ec2-user
                             group: ec2-user
