@@ -1,0 +1,723 @@
+## 3 kafka brokers running on microinstance , inspiration from : Instructor stephane maarek from udemy 
+# i used micro instances to save cost, its okay for dev environment , for prod make sure to use medium for memory purposes
+# have included jmx and node exporter to expose application and instance metrics for prometheus to capture for ease of support
+
+## for north east 1 region, for specefic region change the subnet id and accordinly change the private ip of security groups
+
+
+#Creating parameters
+Parameters:
+    MySubnetID1:
+        Description: Subnet IDs that is a List of Subnet Id
+        Type: 'AWS::EC2::Subnet::Id'
+        Default: "subnet-ca59f395"
+    MySubnetID2:
+        Description: Subnet IDs that is a List of Subnet Id
+        Type: 'AWS::EC2::Subnet::Id'
+        Default: "subnet-37b01951"
+    MySubnetID3:
+        Description: Subnet IDs that is a List of Subnet Id
+        Type: 'AWS::EC2::Subnet::Id'
+        Default: "subnet-af1fab8e"
+    KeyName:
+        Description: 'For SSH access'
+        Type: 'AWS::EC2::KeyPair::KeyName'
+    SSHLocation:
+        Description: The IP address range that can be used to SSH to the EC2 instances
+        Type: String
+        MinLength: '9'
+        MaxLength: '18'
+        Default: '0.0.0.0/0'
+        AllowedPattern: "(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})"
+        ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/x.
+    PrivateIpAddress1:
+        Description: private ip of kafka broker 1
+        Type: String
+        Default: 172.31.32.10
+    PrivateIpAddress2:
+        Description: private ip of kafka broker 2
+        Type: String
+        Default: 172.31.0.10
+    PrivateIpAddress3:
+        Description: private ip of kafka broker 3
+        Type: String
+        Default: 172.31.80.10
+Outputs:
+  Kafka1ENI:
+    Description: Eni for kafka server 1
+    Export:
+      Name: Kafka1ENI
+    Value: !Ref PrivateIpAddress1
+  Kafka2ENI:
+    Description: Eni for kafka server 2
+    Export:
+      Name: Kafka2ENI
+    Value: !Ref PrivateIpAddress2
+  kafka3ENI:
+    Description: eni for kafka server 3
+    Export:
+      Name: kafka3ENI
+    Value: !Ref PrivateIpAddress3
+Resources:
+    ENIkafka1:
+      Type: AWS::EC2::NetworkInterface
+      Properties:
+         Description: Private IP for kafka 1
+         SourceDestCheck: 'false'
+         GroupSet:
+         - Fn::ImportValue: EC2Security
+         SubnetId: !Ref MySubnetID1
+         PrivateIpAddress: !Ref PrivateIpAddress1
+
+    NewVolume1:
+      Type: AWS::EC2::Volume
+      Properties: 
+        Size: 2
+        VolumeType: gp2
+        AvailabilityZone: !Sub "${AWS::Region}b"
+        Tags:
+          - Key: Volumefor
+            Value: kafkaVol1
+      DeletionPolicy: Delete
+
+    VolumeAttachment:
+      Properties:
+        Device: /dev/sdf
+        InstanceId: !Ref EC2Instance
+        VolumeId: !Ref NewVolume1
+      Type: AWS::EC2::VolumeAttachment
+
+    EC2Instance:
+        Type: "AWS::EC2::Instance"
+        Properties:
+            ImageId: "ami-04bf6dcdc9ab498ca"
+            InstanceType: "t2.micro"
+            KeyName: !Ref KeyName
+            AvailabilityZone: !Sub "${AWS::Region}b"
+            NetworkInterfaces:
+              -
+                NetworkInterfaceId: !Ref ENIkafka1
+                DeviceIndex: 0
+            SourceDestCheck: true
+            Tags: 
+              - 
+                Key: "Name"
+                Value: "kafka 1"
+            HibernationOptions: 
+                Configured: false
+                
+                 
+            UserData:
+              Fn::Base64: !Sub |
+                 #!/bin/bash -xe
+                 #check if new volume is empty and then format and attach it 
+
+                 while [ ! -e /dev/xvdf ] ; do echo "Waiting for attachment"; sleep 1 ; done
+
+                  # Format /dev/xvdf if it does not contain a partition yet
+
+                  if [ "$(file -b -s /dev/xvdf)" == "data" ]; then
+                   sudo mkfs.xfs -f /dev/xvdf
+                  fi
+
+                  # create data dictionary for kafka
+
+                  sudo mkdir -p /data/kafka
+
+                  sudo mount -t xfs /dev/xvdf /data/kafka
+
+                  sudo chown -R ec2-user:ec2-user /data/
+
+                  sudo echo '/dev/xvdf /data/kafka xfs defaults 0 0' >> /etc/fstab
+
+                 sudo yum update -y
+
+                 sudo yum update -y aws-cfn-bootstrap
+
+                 sudo yum install git -y
+
+                 sudo yum install wget ca-certificates zip net-tools vim nano tar nc -y
+
+                 sudo yum install java-1.8.0-openjdk -y
+
+                 sudo yum install xfsprogs -y
+
+                 sudo sysctl vm.swappiness=1
+
+                 sudo echo 'vm.swappiness=1' | sudo tee --append /etc/sysctl.conf
+
+                 sudo echo "172.31.16.10 zookeeper1" | sudo tee --append /etc/hosts
+
+                 sudo wget -P /home/ec2-user https://mirrors.estointernet.in/apache/kafka/2.6.0/kafka_2.13-2.6.0.tgz
+
+                 sudo tar -xzf /home/ec2-user/kafka_2.13-2.6.0.tgz
+
+                 sudo rm /home/ec2-user/kafka_2.13-2.6.0.tgz
+
+                 sudo mv /kafka_2.13-2.6.0 /kafka
+
+                 sudo chown -R ec2-user:ec2-user /kafka
+                  #new kafka settings
+                  sudo rm /kafka/config/server.properties
+
+                 sudo yum update -y
+
+                 sleep 30
+
+                  sudo  echo "* hard nofile 100000
+                  * soft nofile 100000" | sudo tee --append /etc/security/limits.conf
+                  
+                  sudo mkdir /home/ec2-user/prometheus
+
+                  sudo chown -R ec2-user:ec2-user /home/ec2-user/prometheus
+
+                  ( cd /home/ec2-user/prometheus ; sudo wget https://repo1.maven.org/maven2/io/prometheus/jmx/jmx_prometheus_javaagent/0.3.1/jmx_prometheus_javaagent-0.3.1.jar )
+                  ( cd /home/ec2-user/prometheus ; sudo wget https://raw.githubusercontent.com/prometheus/jmx_exporter/master/example_configs/kafka-0-8-2.yml )
+
+
+                  sudo wget https://github.com/prometheus/node_exporter/releases/download/v1.0.1/node_exporter-1.0.1.linux-amd64.tar.gz
+
+                  sudo tar -xzf /node_exporter-1.0.1.linux-amd64.tar.gz
+
+                  sudo mv node_exporter-1.0.1.linux-amd64 node_exporter 
+
+                  sudo rm /node_exporter-1.0.1.linux-amd64.tar.gz
+
+                 /opt/aws/bin/cfn-init -s ${AWS::StackId} -r EC2Instance --region ${AWS::Region} || error_exit 'failed to run cfn-init'
+
+                 sudo systemctl daemon-reload
+
+                 sudo systemctl enable kafka.service
+
+                 sudo systemctl start kafka.service
+                 
+
+                 sudo systemctl enable node_exporter.service
+                 sudo systemctl start node_exporter.service
+
+                 # All done so signal success
+
+                 /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackId} --resource Kafka1wait --region ${AWS::Region}
+                
+        Metadata:
+          AWS::CloudFormation::Init:
+            config:
+              files:
+                "/kafka/config/kafka.properties":
+                  content: !Sub
+                    - |
+                      broker.id=1
+                      advertised.listeners=PLAINTEXT://${broker_ip}:9092
+                      delete.topic.enable=true
+                      log.dirs=/data/kafka
+                      num.partitions=8
+                      default.replication.factor=3
+                      log.retention.hours=168
+
+                      zookeeper.connect=zookeeper1:2181
+                      zookeeper.connection.timeout.ms=6000
+
+                      auto.create.topics.enable=false
+                      offsets.topic.replication.factor=3
+                    - broker_ip: !Ref PrivateIpAddress1
+                  encoding: plain
+                  group: ec2-user
+                  owner: ec2-user
+                  mode: "000644"
+                "/etc/systemd/system/kafka.service":
+                  content: |
+                    [Unit]
+                    Description=kafka
+                    After=network.target
+
+                    [Service]
+                    User=ec2-user
+                    Group=ec2-user
+                    Environment="KAFKA_HEAP_OPTS=-Xmx256M -Xms128M"
+                    Environment="KAFKA_OPTS=-javaagent:/home/ec2-user/prometheus/jmx_prometheus_javaagent-0.3.1.jar=8080:/home/ec2-user/prometheus/kafka-0-8-2.yml"
+                    ExecStart=/kafka/bin/kafka-server-start.sh /kafka/config/kafka.properties
+                    ExecStop=/kafka/bin/kafka-server-stop.sh /kafka/config/kafka.properties
+ 
+                    SuccessExitStatus=143
+
+                    [Install]
+                    WantedBy=multi-user.target
+                  group: root
+                  mode: '000755'
+                  owner: root
+                "/usr/local/bin/add_to_bash_profile":
+                  content: |
+                    #!/bin/bash -xe
+                    cat << "EOF" >> /home/ec2-user/.bash_profile
+                    DAEMON_PATH=/home/ec2-user/kafka/bin
+                    export PATH=$PATH:$DAEMON_PATH
+                    export KAFKA_HEAP_OPTS="-Xmx256M -Xms128M"
+                    EOF
+                  group: root
+                  mode: '000755'
+                  owner: root
+                "/etc/systemd/system/node_exporter.service":
+                  content: |
+                        [Unit]
+                        Description=Node Exporter
+
+                        [Service]
+                        User=ec2-user
+                        Group=ec2-user
+                        #EnvironmentFile=/etc/sysconfig/node_exporter
+                        ExecStart=/node_exporter/node_exporter
+
+                        [Install]
+                        WantedBy=multi-user.target
+                  owner: root
+                  group: root
+                  mode: '000755' 
+    Kafka1wait:
+          Type: AWS::CloudFormation::WaitCondition
+          CreationPolicy:
+            ResourceSignal:
+              Timeout: PT5M
+
+# KAFKA SERVER 2
+
+    ENIkafka2:
+          Type: AWS::EC2::NetworkInterface
+          Properties:
+             Description: Private IP for kafka 2
+             SourceDestCheck: 'false'
+             GroupSet:
+             - Fn::ImportValue: EC2Security
+             SubnetId: !Ref MySubnetID2
+             PrivateIpAddress: !Ref PrivateIpAddress2
+
+    NewVolume2:
+          Type: AWS::EC2::Volume
+          Properties: 
+            Size: 2
+            VolumeType: gp2
+            AvailabilityZone: !Sub "${AWS::Region}c"
+            Tags:
+              - Key: Volumefor
+                Value: kafkaVol2
+          DeletionPolicy: Delete
+
+    VolumeAttachment2:
+          Properties:
+            Device: /dev/sdf
+            InstanceId: !Ref EC2Instance2
+            VolumeId: !Ref NewVolume2
+          Type: AWS::EC2::VolumeAttachment
+
+    EC2Instance2:
+            Type: "AWS::EC2::Instance"
+            Properties:
+                ImageId: "ami-04bf6dcdc9ab498ca"
+                InstanceType: "t2.micro"
+                KeyName: !Ref KeyName
+                AvailabilityZone: !Sub "${AWS::Region}c"
+                NetworkInterfaces:
+                  -
+                    NetworkInterfaceId: !Ref ENIkafka2
+                    DeviceIndex: 0
+                SourceDestCheck: true
+                Tags: 
+                  - 
+                    Key: "Name"
+                    Value: "kafka 2"
+                HibernationOptions: 
+                    Configured: false
+                    
+                     
+                UserData:
+                  Fn::Base64: !Sub |
+                     #!/bin/bash -xe
+                     #check if new volume is empty and then format and attach it 
+
+                     while [ ! -e /dev/xvdf ] ; do echo "Waiting for attachment"; sleep 1 ; done
+
+                      # Format /dev/xvdf if it does not contain a partition yet
+
+                      if [ "$(file -b -s /dev/xvdf)" == "data" ]; then
+                       sudo mkfs.xfs -f /dev/xvdf
+                      fi
+
+                      # create data dictionary for kafka
+
+                      sudo mkdir -p /data/kafka
+
+                      sudo mount -t xfs /dev/xvdf /data/kafka
+
+                      sudo chown -R ec2-user:ec2-user /data/
+
+                      sudo echo '/dev/xvdf /data/kafka xfs defaults 0 0' >> /etc/fstab
+
+                     sudo yum update -y
+
+                     sudo yum update -y aws-cfn-bootstrap
+
+                     sudo yum install git -y
+
+                     sudo yum install wget ca-certificates zip net-tools vim nano tar nc -y
+
+                     sudo yum install java-1.8.0-openjdk -y
+
+                     sudo yum install xfsprogs -y
+
+                     sudo sysctl vm.swappiness=1
+
+                     sudo echo 'vm.swappiness=1' | sudo tee --append /etc/sysctl.conf
+
+                     sudo echo "172.31.16.10 zookeeper1" | sudo tee --append /etc/hosts
+
+                     sudo wget -P /home/ec2-user https://mirrors.estointernet.in/apache/kafka/2.6.0/kafka_2.13-2.6.0.tgz
+
+                     sudo tar -xzf /home/ec2-user/kafka_2.13-2.6.0.tgz
+
+                     sudo rm /home/ec2-user/kafka_2.13-2.6.0.tgz
+
+                     sudo mv /kafka_2.13-2.6.0 /kafka
+
+                     sudo chown -R ec2-user:ec2-user /kafka
+                      #new kafka settings
+                      sudo rm /kafka/config/server.properties
+
+                     sudo yum update -y
+
+                     sleep 30
+
+                      sudo  echo "* hard nofile 100000
+                      * soft nofile 100000" | sudo tee --append /etc/security/limits.conf
+
+                      sudo mkdir /home/ec2-user/prometheus
+
+                      sudo chown -R ec2-user:ec2-user /home/ec2-user/prometheus
+
+                      ( cd /home/ec2-user/prometheus ; sudo wget https://repo1.maven.org/maven2/io/prometheus/jmx/jmx_prometheus_javaagent/0.3.1/jmx_prometheus_javaagent-0.3.1.jar )
+                      ( cd /home/ec2-user/prometheus ; sudo wget https://raw.githubusercontent.com/prometheus/jmx_exporter/master/example_configs/kafka-0-8-2.yml )
+
+
+                     sudo wget https://github.com/prometheus/node_exporter/releases/download/v1.0.1/node_exporter-1.0.1.linux-amd64.tar.gz
+
+                     sudo tar -xzf /node_exporter-1.0.1.linux-amd64.tar.gz
+
+                     sudo mv node_exporter-1.0.1.linux-amd64 node_exporter 
+
+                     sudo rm /node_exporter-1.0.1.linux-amd64.tar.gz 
+                      
+
+
+                     /opt/aws/bin/cfn-init -s ${AWS::StackId} -r EC2Instance2 --region ${AWS::Region} || error_exit 'failed to run cfn-init'
+
+                      sudo systemctl daemon-reload
+
+                     sudo systemctl enable kafka.service
+
+                     sudo systemctl start kafka.service
+                     
+
+                     sudo systemctl enable node_exporter.service
+                     sudo systemctl start node_exporter.service
+
+                     # All done so signal success
+                     /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackId} --resource Kafka2wait --region ${AWS::Region}
+                    
+            Metadata:
+              AWS::CloudFormation::Init:
+                config:
+                  files:
+                    "/kafka/config/kafka.properties":
+                      content:
+                        Fn::Sub: 
+                        - |
+                          broker.id=2
+                          advertised.listeners=PLAINTEXT://${broker_ip}:9092
+                          delete.topic.enable=true
+                          log.dirs=/data/kafka
+                          num.partitions=8
+                          default.replication.factor=3
+                          log.retention.hours=168
+
+                          zookeeper.connect=zookeeper1:2181
+                          zookeeper.connection.timeout.ms=6000
+
+                          auto.create.topics.enable=false
+                          offsets.topic.replication.factor=3
+                        - broker_ip: !Ref PrivateIpAddress2
+                      group: ec2-user
+                      owner: ec2-user
+                      mode: "000644"
+                    "/etc/systemd/system/kafka.service":
+                      content: |
+                        [Unit]
+                        Description=kafka
+                        After=network.target
+
+                        [Service]
+                        User=ec2-user
+                        Group=ec2-user
+                        Environment="KAFKA_HEAP_OPTS=-Xmx256M -Xms128M"
+                        Environment="KAFKA_OPTS=-javaagent:/home/ec2-user/prometheus/jmx_prometheus_javaagent-0.3.1.jar=8080:/home/ec2-user/prometheus/kafka-0-8-2.yml"
+                        ExecStart=/kafka/bin/kafka-server-start.sh /kafka/config/kafka.properties
+                        ExecStop=/kafka/bin/kafka-server-stop.sh /kafka/config/kafka.properties
+     
+                        SuccessExitStatus=143
+
+                        [Install]
+                        WantedBy=multi-user.target
+                      group: root
+                      mode: '000755'
+                      owner: root
+                    "/usr/local/bin/add_to_bash_profile":
+                      content: |
+                        #!/bin/bash -xe
+                        cat << "EOF" >> /home/ec2-user/.bash_profile
+                        DAEMON_PATH=/home/ec2-user/kafka/bin
+                        export PATH=$PATH:$DAEMON_PATH
+                        export KAFKA_HEAP_OPTS="-Xmx256M -Xms128M"
+                        EOF
+                      group: root
+                      mode: '000755'
+                      owner: root
+                    "/etc/systemd/system/node_exporter.service":
+                      content: |
+                        [Unit]
+                        Description=Node Exporter
+
+                        [Service]
+                        User=ec2-user
+                        Group=ec2-user
+                        #EnvironmentFile=/etc/sysconfig/node_exporter
+                        ExecStart=/node_exporter/node_exporter
+
+                        [Install]
+                        WantedBy=multi-user.target
+                      owner: root
+                      group: root
+                      mode: '000755'   
+    Kafka2wait:
+              Type: AWS::CloudFormation::WaitCondition
+              CreationPolicy:
+                ResourceSignal:
+                  Timeout: PT5M
+    # KAFKA SERVER 3
+
+    ENIkafka3:
+          Type: AWS::EC2::NetworkInterface
+          Properties:
+             Description: Private IP for kafka 3
+             SourceDestCheck: 'false'
+             GroupSet:
+             - Fn::ImportValue: EC2Security
+             SubnetId: !Ref MySubnetID3
+             PrivateIpAddress: !Ref PrivateIpAddress3
+
+    NewVolume3:
+          Type: AWS::EC2::Volume
+          Properties: 
+            Size: 2
+            VolumeType: gp2
+            AvailabilityZone: !Sub "${AWS::Region}d"
+            Tags:
+              - Key: Volumefor
+                Value: kafkaVol3
+          DeletionPolicy: Delete
+
+    VolumeAttachment3:
+          Properties:
+            Device: /dev/sdf
+            InstanceId: !Ref EC2Instance3
+            VolumeId: !Ref NewVolume3
+          Type: AWS::EC2::VolumeAttachment
+
+    EC2Instance3:
+            Type: "AWS::EC2::Instance"
+            Properties:
+                ImageId: "ami-04bf6dcdc9ab498ca"
+                InstanceType: "t2.micro"
+                KeyName: !Ref KeyName
+                AvailabilityZone: !Sub "${AWS::Region}d"
+                NetworkInterfaces:
+                  -
+                    NetworkInterfaceId: !Ref ENIkafka3
+                    DeviceIndex: 0
+                SourceDestCheck: true
+                Tags: 
+                  - 
+                    Key: "Name"
+                    Value: "kafka 3"
+                HibernationOptions: 
+                    Configured: false
+                    
+                     
+                UserData:
+                  Fn::Base64: !Sub |
+                     #!/bin/bash -xe
+                     #check if new volume is empty and then format and attach it 
+
+                     while [ ! -e /dev/xvdf ] ; do echo "Waiting for attachment"; sleep 1 ; done
+
+                      # Format /dev/xvdf if it does not contain a partition yet
+
+                      if [ "$(file -b -s /dev/xvdf)" == "data" ]; then
+                       sudo mkfs.xfs -f /dev/xvdf
+                      fi
+
+                      # create data dictionary for kafka
+
+                      sudo mkdir -p /data/kafka
+
+                      sudo mount -t xfs /dev/xvdf /data/kafka
+
+                      sudo chown -R ec2-user:ec2-user /data/
+
+                      sudo echo '/dev/xvdf /data/kafka xfs defaults 0 0' >> /etc/fstab
+
+                     sudo yum update -y
+
+                     sudo yum update -y aws-cfn-bootstrap
+
+                     sudo yum install git -y
+
+                     sudo yum install wget ca-certificates zip net-tools vim nano tar nc -y
+
+                     sudo yum install java-1.8.0-openjdk -y
+
+                     sudo yum install xfsprogs -y
+
+                     sudo sysctl vm.swappiness=1
+
+                     sudo echo 'vm.swappiness=1' | sudo tee --append /etc/sysctl.conf
+
+                     sudo echo "172.31.16.10 zookeeper1" | sudo tee --append /etc/hosts
+
+                     sudo wget -P /home/ec2-user https://mirrors.estointernet.in/apache/kafka/2.6.0/kafka_2.13-2.6.0.tgz
+
+                     sudo tar -xzf /home/ec2-user/kafka_2.13-2.6.0.tgz
+
+                     sudo rm /home/ec2-user/kafka_2.13-2.6.0.tgz
+
+                     sudo mv /kafka_2.13-2.6.0 /kafka
+
+                     sudo chown -R ec2-user:ec2-user /kafka
+                      #new kafka settings
+                      sudo rm /kafka/config/server.properties
+
+                     sudo yum update -y
+
+                     sleep 30
+
+                      sudo  echo "* hard nofile 100000
+                      * soft nofile 100000" | sudo tee --append /etc/security/limits.conf
+                      
+                      sudo mkdir /home/ec2-user/prometheus
+
+                      sudo chown -R ec2-user:ec2-user /home/ec2-user/prometheus
+
+                      ( cd /home/ec2-user/prometheus ; sudo wget https://repo1.maven.org/maven2/io/prometheus/jmx/jmx_prometheus_javaagent/0.3.1/jmx_prometheus_javaagent-0.3.1.jar )
+                      ( cd /home/ec2-user/prometheus ; sudo wget https://raw.githubusercontent.com/prometheus/jmx_exporter/master/example_configs/kafka-0-8-2.yml )
+
+                     sudo wget https://github.com/prometheus/node_exporter/releases/download/v1.0.1/node_exporter-1.0.1.linux-amd64.tar.gz
+
+                     sudo tar -xzf /node_exporter-1.0.1.linux-amd64.tar.gz
+
+                     sudo mv node_exporter-1.0.1.linux-amd64 node_exporter 
+
+                     sudo rm /node_exporter-1.0.1.linux-amd64.tar.gz 
+
+
+                     /opt/aws/bin/cfn-init -s ${AWS::StackId} -r EC2Instance3 --region ${AWS::Region} || error_exit 'failed to run cfn-init'
+
+                      sudo systemctl daemon-reload
+
+                     sudo systemctl enable kafka.service
+
+                     sudo systemctl start kafka.service
+                     
+
+                     sudo systemctl enable node_exporter.service
+                     sudo systemctl start node_exporter.service
+
+                     # All done so signal success
+
+                     /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackId} --resource Kafka3wait --region ${AWS::Region}
+                    
+            Metadata:
+              AWS::CloudFormation::Init:
+                config:
+                  files:
+                    "/kafka/config/kafka.properties":
+                      content:
+                        Fn::Sub: 
+                        - |
+                          broker.id=3
+                          advertised.listeners=PLAINTEXT://${broker_ip}:9092
+                          delete.topic.enable=true
+                          log.dirs=/data/kafka
+                          num.partitions=8
+                          default.replication.factor=3
+                          log.retention.hours=168
+
+                          zookeeper.connect=zookeeper1:2181
+                          zookeeper.connection.timeout.ms=6000
+
+                          auto.create.topics.enable=false
+                          offsets.topic.replication.factor=3
+                        - broker_ip: !Ref PrivateIpAddress3
+                      encoding: plain
+                      group: ec2-user
+                      owner: ec2-user
+                      mode: "000644"
+                    "/etc/systemd/system/kafka.service":
+                      content: |
+                        [Unit]
+                        Description=kafka
+                        After=network.target
+
+                        [Service]
+                        User=ec2-user
+                        Group=ec2-user
+                        Environment="KAFKA_HEAP_OPTS=-Xmx256M -Xms128M"
+                        Environment="KAFKA_OPTS=-javaagent:/home/ec2-user/prometheus/jmx_prometheus_javaagent-0.3.1.jar=8080:/home/ec2-user/prometheus/kafka-0-8-2.yml"
+                        ExecStart=/kafka/bin/kafka-server-start.sh /kafka/config/kafka.properties
+                        ExecStop=/kafka/bin/kafka-server-stop.sh /kafka/config/kafka.properties
+     
+                        SuccessExitStatus=143
+
+                        [Install]
+                        WantedBy=multi-user.target
+                      group: root
+                      mode: '000755'
+                      owner: root
+                    "/usr/local/bin/add_to_bash_profile":
+                      content: |
+                        #!/bin/bash -xe
+                        cat << "EOF" >> /home/ec2-user/.bash_profile
+                        DAEMON_PATH=/home/ec2-user/kafka/bin
+                        export PATH=$PATH:$DAEMON_PATH
+                        export KAFKA_HEAP_OPTS="-Xmx256M -Xms128M"
+                        EOF
+                      group: root
+                      mode: '000755'
+                      owner: root
+                    "/etc/systemd/system/node_exporter.service":
+                      content: |
+                        [Unit]
+                        Description=Node Exporter
+
+                        [Service]
+                        User=ec2-user
+                        Group=ec2-user
+                        #EnvironmentFile=/etc/sysconfig/node_exporter
+                        ExecStart=/node_exporter/node_exporter
+
+                        [Install]
+                        WantedBy=multi-user.target
+                      owner: root
+                      group: root
+                      mode: '000755' 
+
+    Kafka3wait:
+              Type: AWS::CloudFormation::WaitCondition
+              CreationPolicy:
+                ResourceSignal:
+                  Timeout: PT5M

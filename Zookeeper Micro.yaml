@@ -1,0 +1,319 @@
+## single zookeeper running on microinstance , inspiration from : Instructor stephane maarek from udemy 
+# i used micro instances to save cost, its okay for dev environment , for prod make sure to use medium for memory purposes
+#Creating parameters
+
+Parameters:
+    MySubnetID1:
+        Description: Subnet IDs that is a List of Subnet Id
+        Type: 'AWS::EC2::Subnet::Id'
+        Default: "subnet-2aed9467"
+    KeyName:
+        Description: 'For SSH access'
+        Type: 'AWS::EC2::KeyPair::KeyName'
+    SSHLocation:
+        Description: The IP address range that can be used to SSH to the EC2 instances
+        Type: String
+        MinLength: '9'
+        MaxLength: '18'
+        Default: '0.0.0.0/0'
+        AllowedPattern: "(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})"
+        ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/x.
+    PrivateIpAddressZoo:
+        Description: Private Ip address of instances
+        Type: String
+        Default: 172.31.16.10
+Outputs:
+  EC2Security:
+    Description: Security group Outputs
+    Export:
+      Name: EC2Security
+    Value: !Ref EC2SecurityGroup
+  ZooEni:
+    Description: Private Ip for ZooKeeper
+    Export:
+      Name: ZooEni
+    Value: !Ref PrivateIpAddressZoo
+
+Resources:
+  # security gorup
+    EC2SecurityGroup:
+        Type: "AWS::EC2::SecurityGroup"
+        Properties:
+            GroupDescription: "kafka security group"
+            GroupName: "Kafka-zookeeper"
+            VpcId: "vpc-a3c702de"
+            SecurityGroupIngress: 
+              - 
+                CidrIp: "172.31.0.0/16"
+                FromPort: 2888
+                IpProtocol: "tcp"
+                ToPort: 2888
+              - 
+                CidrIp: !Ref SSHLocation
+                FromPort: 22
+                IpProtocol: "tcp"
+                ToPort: 22
+              - 
+                CidrIp: "172.31.0.0/16"
+                FromPort: 3888
+                IpProtocol: "tcp"
+                ToPort: 3888
+              - 
+                CidrIp: "172.31.0.0/16"
+                FromPort: 2181
+                IpProtocol: "tcp"
+                ToPort: 2181
+              - 
+                CidrIp: !Ref SSHLocation
+                FromPort: 2181
+                IpProtocol: "tcp"
+                ToPort: 2181
+              - 
+                CidrIp: "172.31.0.0/16"
+                FromPort: 9092
+                IpProtocol: "tcp"
+                ToPort: 9092
+              - 
+                CidrIp: !Ref SSHLocation
+                FromPort: 9092
+                IpProtocol: "tcp"
+                ToPort: 9092
+              - 
+                CidrIp: "0.0.0.0/0"
+                FromPort: 9000
+                IpProtocol: "tcp"
+                ToPort: 9000
+              - 
+                CidrIp: "0.0.0.0/0"
+                FromPort: 8001
+                IpProtocol: "tcp"
+                ToPort: 8001
+              - 
+                CidrIp: "0.0.0.0/0"
+                FromPort: 22
+                IpProtocol: "tcp"
+                ToPort: 22
+              -
+                CidrIp: "0.0.0.0/0"
+                FromPort: 8778
+                IpProtocol: "tcp"
+                ToPort: 8778
+              -
+                CidrIp: "0.0.0.0/0"
+                FromPort: 8080
+                IpProtocol: "tcp"
+                ToPort: 8080
+              -
+                CidrIp: "0.0.0.0/0"
+                FromPort: 7070
+                IpProtocol: "tcp"
+                ToPort: 7070
+              -
+                CidrIp: "0.0.0.0/0"
+                FromPort: 9999
+                IpProtocol: "tcp"
+                ToPort: 9999
+              -
+                CidrIp: "0.0.0.0/0"
+                FromPort: 9100
+                IpProtocol: "tcp"
+                ToPort: 9100
+              -
+                CidrIp: "0.0.0.0/0"
+                FromPort: 9090
+                IpProtocol: "tcp"
+                ToPort: 9090
+              -
+                CidrIp: "0.0.0.0/0"
+                FromPort: 9093
+                IpProtocol: "tcp"
+                ToPort: 9093
+            SecurityGroupEgress: 
+              - 
+                CidrIp: "0.0.0.0/0"
+                IpProtocol: "-1"
+
+    myENIzookeeper:
+      Type: AWS::EC2::NetworkInterface
+      Properties:
+         Description: Private IP for zookeeper 1
+         SourceDestCheck: 'false'
+         GroupSet:
+         - !Ref EC2SecurityGroup
+         SubnetId: !Ref MySubnetID1
+         PrivateIpAddress: !Ref PrivateIpAddressZoo
+
+    NewVolume1:
+      Type: AWS::EC2::Volume
+      Properties: 
+        Size: 2
+        VolumeType: gp2
+        AvailabilityZone: !Sub "${AWS::Region}a"
+        Tags:
+          - Key: Volumefor
+            Value: zookeeperVol
+      DeletionPolicy: Delete
+
+    VolumeAttachment:
+      Properties:
+        Device: /dev/sdf
+        InstanceId: !Ref EC2Instance1
+        VolumeId: !Ref NewVolume1
+      Type: AWS::EC2::VolumeAttachment
+
+    EC2Instance1:
+        Type: "AWS::EC2::Instance"
+        Properties:
+            ImageId: "ami-04bf6dcdc9ab498ca"
+            InstanceType: "t2.micro"
+            KeyName: !Ref KeyName
+            AvailabilityZone: !Sub "${AWS::Region}a"
+            NetworkInterfaces:
+              -
+                NetworkInterfaceId: !Ref myENIzookeeper
+                DeviceIndex: 0
+            SourceDestCheck: true
+            Tags: 
+              - 
+                Key: "Name"
+                Value: "Server 1"
+            HibernationOptions: 
+                Configured: false
+                
+                 
+            UserData:
+              Fn::Base64: !Sub |
+                 #!/bin/bash -xe
+                 #check if new volume is empty and then format and attach it 
+
+                 while [ ! -e /dev/xvdf ] ; do echo "Waiting for attachment"; sleep 1 ; done
+
+                  # Format /dev/xvdf if it does not contain a partition yet
+
+                  if [ "$(file -b -s /dev/xvdf)" == "data" ]; then
+                   sudo mkfs.xfs -f /dev/xvdf
+                  fi
+
+                  # create data dictionary for zookeeper
+
+                  sudo mkdir -p /data/zookeeper
+
+                  sudo mount -t xfs /dev/xvdf /data/zookeeper
+
+                  sudo chown -R ec2-user:ec2-user /data/
+
+                  sudo echo '/dev/xvdf /data/zookeeper xfs defaults 0 0' >> /etc/fstab
+
+                 sudo yum update -y
+
+                 sudo yum update -y aws-cfn-bootstrap
+
+                 sudo yum install git -y
+
+                 sudo yum install wget ca-certificates zip net-tools vim nano tar nc -y
+
+                 sudo yum install java-1.8.0-openjdk -y
+
+                 sudo yum install xfsprogs -y
+
+                 sudo sysctl vm.swappiness=1
+
+                 sudo echo 'vm.swappiness=1' | sudo tee --append /etc/sysctl.conf
+
+                 sudo echo "172.31.16.10 zookeeper1" | sudo tee --append /etc/hosts
+
+                 sudo wget -P /home/ec2-user https://mirrors.estointernet.in/apache/kafka/2.6.0/kafka_2.13-2.6.0.tgz
+
+                 sudo tar -xzf /home/ec2-user/kafka_2.13-2.6.0.tgz
+
+                 sudo rm /home/ec2-user/kafka_2.13-2.6.0.tgz
+
+                 sudo mv /kafka_2.13-2.6.0 /kafka
+
+                 sudo chown -R ec2-user:ec2-user /kafka
+                  #new zookeeper settings
+                  sudo rm /kafka/config/zookeeper.properties
+
+                 sudo yum update -y
+
+                 sleep 30
+                 
+                  sudo echo "1" > /data/zookeeper/myid
+
+                  sudo  echo "* hard nofile 100000
+                  * soft nofile 100000" | sudo tee --append /etc/security/limits.conf
+                  
+
+
+                 /opt/aws/bin/cfn-init -s ${AWS::StackId} -r EC2Instance1 --region ${AWS::Region} || error_exit 'failed to run cfn-init'
+
+                 sudo systemctl enable zookeeper.service
+
+                 sudo systemctl start zookeeper.service
+                 # All done so signal success
+
+                 /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackId} --resource EC2Instance1 --region ${AWS::Region}
+                
+        Metadata:
+          AWS::CloudFormation::Init:
+            config:
+              files:
+                "/kafka/config/zookeeper.properties":
+                  content: |
+                    # the location to store the in-memory database snapshots and, unless specified otherwise, the transaction log of updates to the database.
+                    dataDir=/data/zookeeper
+                    # the port at which the clients will connect
+                    clientPort=2181
+                    # disable the per-ip limit on the number of connections since this is a non-production config
+                     maxClientCnxns=0
+                     # the basic time unit in milliseconds used by ZooKeeper. It is used to do heartbeats and the minimum session timeout will be twice the tickTime.
+                    tickTime=2000
+                    # The number of ticks that the initial synchronization phase can take
+                    initLimit=10
+                    # The number of ticks that can pass between
+                    # sending a request and getting an acknowledgement
+                    syncLimit=5
+                    # zoo servers
+                    # these hostnames such as `zookeeper-1` come from the /etc/hosts file
+                    server.1=zookeeper1:2888:3888
+                    #server.2=zookeeper2:2888:3888
+                    #server.3=zookeeper3:2888:3888
+                    4lw.commands.whitelist=*
+                  encoding: plain
+                  group: ec2-user
+                  owner: ec2-user
+                  mode: "000644"
+                "/etc/systemd/system/zookeeper.service":
+                  content: |
+                    [Unit]
+                    Description=ZooKeeper
+                    After=network.target
+
+                    [Service]
+                    User=ec2-user
+                    Group=ec2-user
+                    SyslogIdentifier=zookeeper
+                    ExecStart=/kafka/bin/zookeeper-server-start.sh /kafka/config/zookeeper.properties
+                    ExecStop=/kafka/bin/zookeeper-server-stop.sh /kafka/config/zookeeper.properties
+ 
+                    SuccessExitStatus=143
+
+                    [Install]
+                    WantedBy=multi-user.target
+                  group: root
+                  mode: '000755'
+                  owner: root
+                "/usr/local/bin/add_to_bash_profile":
+                  content: |
+                    #!/bin/bash -xe
+                    cat << "EOF" >> /home/ec2-user/.bash_profile
+                    DAEMON_PATH=/home/ec2-user/kafka/bin
+                    export PATH=$PATH:$DAEMON_PATH
+                    export KAFKA_HEAP_OPTS="-Xmx256M -Xms128M"
+                    EOF
+                  group: root
+                  mode: '000755'
+                  owner: root
+          CreationPolicy:
+            ResourceSignal:
+              Timeout: PT5M
