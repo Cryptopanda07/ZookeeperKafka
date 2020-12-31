@@ -1,4 +1,4 @@
-#Createdby CryptoPanda , Inspirationo : Instructor Stephane maarek- Udemy, Friend & Mentor : RajYadhav : https://www.linkedin.com/in/raj-yadhav-54b2aa145/ 
+#Createdby CryptoPanda , Inspiration : Instructor Stephane maarek- Udemy, Friend & Mentor : RajYadhav : https://www.linkedin.com/in/raj-yadhav-54b2aa145/ 
 #this is a test setup for the previously provided kafka and zookeeper setup in micro instances on AWS using cloudformation 
 
 ## i have integrated jmx and node exporter on the application machine and setup alert manager and prometheus to capture those alerts from app machine
